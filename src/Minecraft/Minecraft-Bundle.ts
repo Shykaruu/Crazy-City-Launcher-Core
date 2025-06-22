@@ -17,7 +17,7 @@ export interface BundleItem {
 	path: string;                       // Local path where file is or should be stored
 	folder?: string;                    // Directory path (derived from 'path')
 	content?: string;                   // File content if type === "CFILE"
-	sha1?: string;                      // Expected SHA-1 hash for the file
+	hash?: string;                      // Expected SHA-1 hash for the file
 	size?: number;                      // Size in bytes if relevant
 	url?: string;                       // Download URL if relevant
 }
@@ -54,8 +54,8 @@ export default class MinecraftBundle {
 		const toDownload: BundleItem[] = [];
 
 		for (const file of bundle) {
-			if (!file.path) continue;
-
+			if (!file.path) continue; 
+			
 			// Convert path to absolute, consistent format
 			file.path = path.resolve(this.options.path, file.path).replace(/\\/g, '/');
 			file.folder = file.path.split('/').slice(0, -1).join('/');
@@ -84,9 +84,9 @@ export default class MinecraftBundle {
 				}
 
 				// If the file has a hash and doesn't match, mark it for download
-				if (file.sha1) {
+				if (file.hash) {
 					const localHash = await getFileHash(file.path);
-					if (localHash !== file.sha1) {
+					if (localHash !== file.hash) {
 						toDownload.push(file);
 					}
 				}

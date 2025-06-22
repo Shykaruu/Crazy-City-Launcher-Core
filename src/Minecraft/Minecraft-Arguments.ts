@@ -26,9 +26,12 @@ const MOJANG_LIBRARY_MAP: Record<string, string> = {
 export interface LaunchOptions {
 	path: string;              // Base path to Minecraft data folder
 	instance?: string;         // Instance name (if using multi-instance approach)
-	authenticator: any;        // Auth object containing tokens, user info, etc.
+	accessToken: string; 
+	expiresAt: string;       // Auth object containing tokens, user info, etc.
+	microsoft: AuthUser;
+	username: string,
+	uuid: string,
 	version?: string;         // Minecraft version
-	bypassOffline?: boolean;   // Bypass offline mode for multiplayer
 	memory: {
 		min?: string;             // Minimum memory (e.g. "512M", "1G")
 		max?: string;             // Maximum memory (e.g. "4G", "8G")
@@ -69,6 +72,11 @@ export interface Library {
 	natives?: Record<string, string>;
 	rules?: { os?: { name?: string } }[];
 }
+export interface AuthUser {
+	access_token: string,
+	refresh_token: string,
+	expires_at: string
+}
 
 /**
  * Represents a loader JSON structure (e.g. Forge or Fabric).
@@ -100,11 +108,9 @@ export interface LaunchArguments {
  */
 export default class MinecraftArguments {
 	private options: LaunchOptions;
-	private authenticator: any;
 
 	constructor(options: LaunchOptions) {
 		this.options = options;
-		this.authenticator = options.authenticator;
 	}
 
 	/**
@@ -147,23 +153,15 @@ export default class MinecraftArguments {
 			);
 		}
 
-		// Determine user type (e.g. 'msa' or 'Xbox') depending on version and authenticator
-		let userType = 'msa';
-		if (versionJson.id.startsWith('1.16')) {
-			userType = 'Xbox';
-		} else {
-			userType = this.authenticator.meta.type === 'Xbox' ? 'msa' : this.authenticator.meta.type;
-		}
-
 		// Map of placeholders to actual values
 		const placeholderMap: Record<string, string> = {
-			'${auth_access_token}': this.authenticator.access_token,
-			'${auth_session}': this.authenticator.access_token,
-			'${auth_player_name}': this.authenticator.name,
-			'${auth_uuid}': this.authenticator.uuid,
-			'${auth_xuid}': this.authenticator?.xboxAccount?.xuid || this.authenticator.access_token,
-			'${user_properties}': this.authenticator.user_properties,
-			'${user_type}': userType,
+			'${auth_access_token}': this.options.accessToken,
+			'${auth_session}': this.options.accessToken,
+			'${auth_player_name}': this.options.username,
+			'${auth_uuid}': this.options.uuid,
+			'${auth_xuid}': this.options.accessToken,
+			'${user_properties}': "{}",
+			'${user_type}': "msa",
 			'${version_name}': loaderJson ? loaderJson.id || versionJson.id : versionJson.id,
 			'${assets_index_name}': versionJson.assetIndex.id,
 			'${game_directory}': this.options.instance
@@ -176,9 +174,8 @@ export default class MinecraftArguments {
 				? `${this.options.path}/resources`
 				: `${this.options.path}/assets`,
 			'${version_type}': versionJson.type,
-			'${clientid}': this.authenticator.clientId
-				|| this.authenticator.client_token
-				|| this.authenticator.access_token
+			'${clientid}': this.options.uuid
+				|| this.options.accessToken
 		};
 
 		// Replace placeholders in the game arguments
@@ -209,6 +206,46 @@ export default class MinecraftArguments {
 		return gameArgs.filter(item => typeof item === 'string');
 	}
 
+
+	public base64ToArrayBuffer(base64: string) {
+	    const binaryString = atob(base64);
+	    let bytes = new Uint8Array(binaryString.length);
+	    for (let i = 0; i < binaryString.length; i++) {
+	        bytes[i] = binaryString.charCodeAt(i);
+	    }
+	    return bytes.buffer;
+	}
+
+	public arrayBufferToBase64(buffer: any) {
+	    let binary = '';
+	    let bytes = new Uint8Array(buffer);
+	    const len = bytes.byteLength;
+	    for (let i = 0; i < len; i++) {
+	        binary += String.fromCharCode(bytes[i]);
+	    }
+	    return btoa(binary);
+	}
+
+	public publicPemToBuffer(pem: any) {
+	    const b64Lines = pem.replace('-----BEGIN PUBLIC KEY-----', '')
+	        .replace('-----END PUBLIC KEY-----', '')
+	        .replace(/\n/g, '');
+	    return this.base64ToArrayBuffer(b64Lines);
+	}
+
+	public async importPublicKey(pem: any) {
+	    var keyBuffer = this.publicPemToBuffer(pem);
+	    return await window.crypto.subtle.importKey(
+	        'spki',
+	        keyBuffer,
+	        {
+	            name: 'RSA-OAEP',
+	            hash: 'SHA-256'
+	        },
+	        true,
+	        ['encrypt']
+	    );
+	}
 	/**
 	 * Builds the JVM arguments needed by Minecraft. This includes memory settings,
 	 * OS-specific options, and any additional arguments supplied by the user.
@@ -244,14 +281,6 @@ export default class MinecraftArguments {
 			if (opt) {
 				jvmArgs.push(opt);
 			}
-		}
-
-		// bypass offline mode multiplayer
-		if (this.options?.bypassOffline) {
-			jvmArgs.push('-Dminecraft.api.auth.host=https://nope.invalid/');
-			jvmArgs.push('-Dminecraft.api.account.host=https://nope.invalid/');
-			jvmArgs.push('-Dminecraft.api.session.host=https://nope.invalid/');
-			jvmArgs.push('-Dminecraft.api.services.host=https://nope.invalid/');
 		}
 
 		// If natives are specified, add the native library path
@@ -300,7 +329,7 @@ export default class MinecraftArguments {
 
 		for (const dep of combinedLibraries) {
 			const parts = getPathLibraries(dep.name);
-			const version = semver.valid(semver.coerce(parts.version));
+			const version = semver.coerce(parts.version);
 			if (!version) continue;
 
 			const pathParts = parts.path.split('/');
@@ -309,10 +338,7 @@ export default class MinecraftArguments {
 			const key = `${basePath}/${parts.name.replace(`-${parts.version}`, '')}`;
 			const current = map.get(key);
 
-			const isSupportedVersion = semver.satisfies(semver.valid(semver.coerce(this.options.version)), '1.14.4 - 1.18.2');
-			const isWindows = process.platform === 'win32';
-
-			if (!current || semver.gt(version, current.version) && (isSupportedVersion && isWindows)) {
+			if (!current || semver.gt(version, current.version)) {
 				map.set(key, { ...dep, version });
 			}
 		}

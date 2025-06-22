@@ -21,6 +21,11 @@ import argumentsMinecraft from './Minecraft/Minecraft-Arguments.js';
 import { isold } from './utils/Index.js';
 import Downloader from './utils/Downloader.js';
 
+type microsoft = {
+	access_token: string,
+	refresh_token: string,
+	expires_at: string
+}
 type loader = {
 	/**
 	 * Path to loader directory. Relative to absolute path to Minecraft's root directory (config option `path`).
@@ -47,7 +52,13 @@ type loader = {
 	/**
 	 * Should the launcher use a loader?
 	 */
-	enable?: boolean
+	enable?: boolean,
+
+	mods?: mod[]
+}
+type mod = {
+	path: string,
+	load: boolean
 }
 
 /**
@@ -113,14 +124,22 @@ export type LaunchOPTS = {
 	 * URL to the launcher backend. Refer to [Selvania Launcher Wiki](https://github.com/luuxis/Selvania-Launcher/blob/master/docs/wiki_EN-US.md) for setup instructions.
 	 */
 	url?: string | null,
+
 	/**
-	 * Something to Authenticate the player. 
-	 * 
-	 * Refer to `Mojang`, `Microsoft` or `AZauth` classes.
-	 * 
-	 * Example: `await Mojang.login('Luuxis')`
+	 * Token to authentify the user for file downloading && instance data fetch
 	 */
-	authenticator: any,
+	accessToken: string,
+	expiresAt: string,
+	microsoft: microsoft,
+	/**
+	 * User name
+	 */
+	username: string,
+	/**
+	 * User Unique ID
+	 */
+	uuid: string,
+
 	/**
 	 * Connection timeout in milliseconds.
 	 */
@@ -144,6 +163,7 @@ export type LaunchOPTS = {
 	 * Example: `'PokeMoonX'`
 	 */
 	instance?: string,
+	id?: string,
 	/**
 	 * Should Minecraft process be independent of launcher?
 	 */
@@ -152,12 +172,6 @@ export type LaunchOPTS = {
 	 * How many concurrent downloads can be in progress at once.
 	 */
 	downloadFileMultiple?: number,
-	/**
-	 * Should the launcher bypass offline mode?
-	 * 
-	 * If `true`, the launcher will not check if the user is online.
-	 */
-	bypassOffline?: boolean,
 	intelEnabledMac?: boolean,
 	/**
 	 * Loader config
@@ -206,7 +220,7 @@ export default class Launch extends EventEmitter {
 	async Launch(opt: LaunchOPTS) {
 		const defaultOptions: LaunchOPTS = {
 			url: null,
-			authenticator: null,
+			accessToken: null,
 			timeout: 10000,
 			path: '.Minecraft',
 			version: 'latest_release',
@@ -214,13 +228,13 @@ export default class Launch extends EventEmitter {
 			detached: false,
 			intelEnabledMac: false,
 			downloadFileMultiple: 5,
-			bypassOffline: false,
 
 			loader: {
 				path: './loader',
 				type: null,
 				build: 'latest',
 				enable: false,
+				mods: []
 			},
 
 			mcp: null,
@@ -262,13 +276,11 @@ export default class Launch extends EventEmitter {
 			this.options.loader.build = this.options.loader.build.toLowerCase()
 		}
 
-		if (!this.options.authenticator) return this.emit("error", { error: "Authenticator not found" });
 		if (this.options.downloadFileMultiple < 1) this.options.downloadFileMultiple = 1
 		if (this.options.downloadFileMultiple > 30) this.options.downloadFileMultiple = 30
 		if (typeof this.options.loader.path !== 'string') this.options.loader.path = `./loader/${this.options.loader.type}`;
 		this.start();
 	}
-
 
 	async start() {
 		let data: any = await this.DownloadGame();
@@ -295,10 +307,6 @@ export default class Launch extends EventEmitter {
 		if (!fs.existsSync(logs)) fs.mkdirSync(logs, { recursive: true });
 
 		let argumentsLogs: string = Arguments.join(' ')
-		argumentsLogs = argumentsLogs.replaceAll(this.options.authenticator?.access_token, '????????')
-		argumentsLogs = argumentsLogs.replaceAll(this.options.authenticator?.client_token, '????????')
-		argumentsLogs = argumentsLogs.replaceAll(this.options.authenticator?.uuid, '????????')
-		argumentsLogs = argumentsLogs.replaceAll(this.options.authenticator?.xboxAccount?.xuid, '????????')
 		argumentsLogs = argumentsLogs.replaceAll(`${this.options.path}/`, '')
 		this.emit('data', `Launching with arguments ${argumentsLogs}`);
 
@@ -315,7 +323,7 @@ export default class Launch extends EventEmitter {
 			return this.emit('error', InfoVersion);
 		}
 		let { json, version } = InfoVersion;
-
+		
 		let libraries = new librariesMinecraft(this.options)
 		let bundle = new bundleMinecraft(this.options)
 		let java = new javaMinecraft(this.options)
@@ -329,14 +337,39 @@ export default class Launch extends EventEmitter {
 		});
 
 		let gameLibraries: any = await libraries.Getlibraries(json);
-		let gameAssetsOther: any = await libraries.GetAssetsOthers(this.options.url);
+
+		/// Allow auth user to download lib && others 
 		let gameAssets: any = await new assetsMinecraft(this.options).getAssets(json);
 		let gameJava: any = this.options.java.path ? { files: [] } : await java.getJavaFiles(json);
 
+		/// Handle differently the others assets verification && dl due of auth check
+		let gameAssetsOther: any = await libraries.GetAssetsOthers(this.options.url, this.options.loader.mods, this.options.id);
+			let assetsList: any = await bundle.checkBundle([...gameAssetsOther]);
+			if(assetsList.length > 0) {
+			    	let downloader = new Downloader();
+			    	let totsize = await bundle.getTotalSize(assetsList);
+			    	downloader.on("progress", (DL: any, totDL: any, element: any) => {
+			    	this.emit("progress", DL, totDL, element);
+			    });
+    
+			    	downloader.on("speed", (speed: any) => {
+			    	this.emit("speed", speed);
+			    });
+    
+			    	downloader.on("estimated", (time: any) => {
+			    	this.emit("estimated", time);
+			    });
+    
+			    	downloader.on("error", (e: any) => {
+			    	this.emit("error", e);
+			    });
+
+				await downloader.downloadFileMultiple(assetsList, totsize, this.options.downloadFileMultiple, this.options.timeout);
+			}
 
 		if (gameJava.error) return gameJava
 
-		let filesList: any = await bundle.checkBundle([...gameLibraries, ...gameAssetsOther, ...gameAssets, ...gameJava.files]);
+		let filesList: any = await bundle.checkBundle([...gameLibraries, ...gameAssets, ...gameJava.files]);
 
 		if (filesList.length > 0) {
 			let downloader = new Downloader();

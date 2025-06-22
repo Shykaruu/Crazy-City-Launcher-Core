@@ -83,6 +83,8 @@ interface CustomAssetItem {
 	hash: string;
 	size: number;
 	url: string;
+	type?: string;
+	id?: string;
 }
 
 /**
@@ -99,7 +101,7 @@ interface LibrariesOptions {
  * Represents a file or library entry that needs to be downloaded and stored.
  */
 interface LibraryDownload {
-	sha1?: string;
+	hash?: string;
 	size?: number;
 	path: string;
 	type: string;
@@ -162,7 +164,7 @@ export default class Libraries {
 			if (!artifact) continue;
 
 			libraries.push({
-				sha1: artifact.sha1,
+				hash: artifact.sha1,
 				size: artifact.size,
 				path: `libraries/${artifact.path}`,
 				type: type,
@@ -172,7 +174,7 @@ export default class Libraries {
 
 		// Add the main Minecraft client JAR to the list
 		libraries.push({
-			sha1: this.json.downloads.client.sha1,
+			hash: this.json.downloads.client.sha1,
 			size: this.json.downloads.client.size,
 			path: `versions/${this.json.id}/${this.json.id}.jar`,
 			type: 'Libraries',
@@ -189,6 +191,15 @@ export default class Libraries {
 		return libraries;
 	}
 
+	public async getRemoteModConfig(instance: string) {
+		const response = await fetch(`https://panel.crazycity.fr/api/distribution/mods/${instance}`, {
+  			method: 'GET',
+		    headers: {
+		      'Content-Type': 'application/json'
+		    }
+		});
+		return await response.json()
+	}
 	/**
 	 * Fetches custom assets or libraries from a remote URL if provided.
 	 * This method expects the response to be an array of objects with
@@ -197,20 +208,68 @@ export default class Libraries {
 	 * @param url The remote URL that returns a JSON array of CustomAssetItem
 	 * @returns   An array of LibraryDownload entries describing each item
 	 */
-	public async GetAssetsOthers(url: string | null): Promise<LibraryDownload[]> {
+	public async GetAssetsOthers(url: string | null, modConfig: any, instance: string): Promise<LibraryDownload[]> {
 		if (!url) return [];
+		const remoteConfigMod = await this.getRemoteModConfig(instance)
 
-		const response = await fetch(url);
-		const data: CustomAssetItem[] = await response.json();
+		const response = await fetch(url, {
+  			method: 'GET',
+		    headers: {
+		      'Content-Type': 'application/json'
+		    }
+		});
+		const data: CustomAssetItem[] = (await response.json())['files'];
 
 		const assets: LibraryDownload[] = [];
 		for (const asset of data) {
 			if (!asset.path) continue;
+			
+			const fileType = asset.path.split('/')[0];
+
+			if(asset.type && (asset.type === "mod") && asset.id) {
+				/// if mod is in local config
+				if(modConfig[asset.id] !== undefined) {
+					if(modConfig[asset.id] === true) {
+						const cleanPath = this.cleanModPath(asset.path)
+
+						assets.push({
+							hash: asset.hash,
+							size: asset.size,
+							type: fileType,
+							path: this.options.instance
+								? `instances/${this.options.instance}/${cleanPath}`
+								: cleanPath,
+							url: asset.url
+						});
+					}
+				} else {
+					/// If mod is not in config get from remote
+					for(const mod of remoteConfigMod) {
+						if(mod.id === asset.id) {
+							if((mod.type === 'optionalon') || (mod.type === 'required')) {
+								const cleanPath = this.cleanModPath(asset.path)
+
+								assets.push({
+									hash: asset.hash,
+									size: asset.size,
+									type: fileType,
+									path: this.options.instance
+										? `instances/${this.options.instance}/${cleanPath}`
+										: cleanPath,
+									url: asset.url
+								});
+							}
+							break;
+						}
+					}
+				}
+
+				continue;
+			}
 
 			// The 'type' is deduced from the first part of the path
-			const fileType = asset.path.split('/')[0];
 			assets.push({
-				sha1: asset.hash,
+				hash: asset.hash,
 				size: asset.size,
 				type: fileType,
 				path: this.options.instance
@@ -221,7 +280,9 @@ export default class Libraries {
 		}
 		return assets;
 	}
-
+	cleanModPath(path: string) {
+  		return path.replace(/mods\/(required|optionalon|optionaloff)\//, 'mods/');
+	}
 	/**
 	 * Extracts native libraries from the downloaded jars (those marked type="Native")
 	 * and places them into the "natives" folder under "versions/<id>/natives".

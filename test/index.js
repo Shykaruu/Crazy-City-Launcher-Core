@@ -23,9 +23,8 @@ let mc
     await launcher.Launch({
         path: './minecraft',
         authenticator: mc,
-        version: '1.16.5',
+        version: '1.8.9',
         intelEnabledMac: true,
-        instance: "test-instance",
         loader: {
             type: 'forge',
             build: 'latest',
@@ -34,12 +33,7 @@ let mc
         memory: {
             min: '2G',
             max: '4G'
-        },
-        java: {
-            path: null,
-            version: null,
-            type: 'jre',
-        },
+        }
     });
 
     launcher.on('progress', (progress, size) => console.log(`[DL] ${((progress / size) * 100).toFixed(2)}%`))

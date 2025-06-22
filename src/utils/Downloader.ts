@@ -88,8 +88,7 @@ export default class Downloader extends EventEmitter {
 		files: DownloadOptions[],
 		size: number,
 		limit: number = 1,
-		timeout: number = 10000
-	): Promise<void> {
+		timeout: number = 10000): Promise<void> {
 		if (limit > files.length) limit = files.length;
 
 		let completed = 0;     // Number of downloads completed
@@ -129,7 +128,7 @@ export default class Downloader extends EventEmitter {
 			const timeoutId = setTimeout(() => controller.abort(), timeout);
 
 			try {
-				const response = await fetch(file.url, { signal: controller.signal });
+				const response = await fetch(file.url, { signal: controller.signal })
 
 				clearTimeout(timeoutId);
 
@@ -178,6 +177,7 @@ export default class Downloader extends EventEmitter {
 			}, 100);
 		});
 	}
+	
 
 	/**
 	 * Performs a HEAD request on the given URL to check if it is valid (status=200)
