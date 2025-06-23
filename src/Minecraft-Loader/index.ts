@@ -217,11 +217,19 @@ export default class Loader extends EventEmitter {
 			this.emit('patch', patch);
 		});
 
-		const installer = await neoForge.downloadInstaller(LoaderData);
+		let installer = await neoForge.downloadInstaller(LoaderData);
 		if (installer.error) return installer;
 
 		// Extract the main profile
-		const profile: any = await neoForge.extractProfile(installer.filePath);
+		let profile: any;
+		try {
+			profile = await neoForge.extractProfile(installer.filePath);
+		} catch(exception) {
+			// Remove corrupted installer && try to re-download it
+			fs.unlinkSync(installer.filePath);
+			installer = await neoForge.downloadInstaller(LoaderData);
+			profile = await neoForge.extractProfile(installer.filePath);
+		}
 		if (profile.error) return profile;
 
 		// Write version JSON
