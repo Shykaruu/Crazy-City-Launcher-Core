@@ -8,6 +8,7 @@
 import fs from 'fs';
 import { EventEmitter } from 'events';
 import { fromAnyReadable } from './Index.js';
+import nodeFetch from 'node-fetch';
 
 /**
  * Describes a single file to be downloaded by the Downloader class.
@@ -88,23 +89,31 @@ export default class Downloader extends EventEmitter {
 		files: DownloadOptions[],
 		size: number,
 		limit: number = 1,
-		timeout: number = 10000): Promise<void> {
-		if (limit > files.length) limit = files.length;
+		timeout: number = 10000
+	): Promise<void> {
+		if (limit > files.length) {
+			limit = files.length;
+		}
 
 		let completed = 0;     // Number of downloads completed
 		let downloaded = 0;    // Cumulative bytes downloaded
 		let queued = 0;        // Index of the next file to download
+		const maxRetries = 5;  // Maximum number of retries for failed downloads
 
 		let start = Date.now();
 		let before = 0;
-		const speeds: number[] = [];
+		let speeds: number[] = [];
 
+		// A repeating interval to calculate speed and ETA
 		const estimated = setInterval(() => {
-			const duration = (Date.now() - start) / 1000;
-			const chunkDownloaded = downloaded - before;
-			if (speeds.length >= 5) speeds.shift();
+			const duration = (Date.now() - start) / 1000;  // seconds
+			const chunkDownloaded = downloaded - before;   // new bytes in this interval
+			if (speeds.length >= 5) {
+				speeds.shift();  // keep last 4 measurements
+			}
 			speeds.push(chunkDownloaded / duration);
 
+			// Average of speeds
 			const avgSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length;
 			this.emit('speed', avgSpeed);
 
@@ -115,49 +124,57 @@ export default class Downloader extends EventEmitter {
 			before = downloaded;
 		}, 500);
 
-		const downloadNext = async (): Promise<void> => {
-			if (queued >= files.length) return;
+		// Recursive function that downloads the next file in the queue
+		const downloadNext = async (retries = 0): Promise<void> => {
+			if (queued < files.length) {
+				const file = files[queued];
+				queued++;
 
-			const file = files[queued++];
-			if (!fs.existsSync(file.folder)) {
-				fs.mkdirSync(file.folder, { recursive: true, mode: 0o777 });
-			}
+				if (!fs.existsSync(file.folder)) {
+					fs.mkdirSync(file.folder, { recursive: true, mode: 0o777 });
+				}
 
-			const writer = fs.createWriteStream(file.path, { flags: 'w', mode: 0o777 });
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), timeout);
+				// Create a write stream for the file
+				const writer = fs.createWriteStream(file.path, { flags: 'w', mode: 0o777 });
 
-			try {
-				const response = await fetch(file.url, { signal: controller.signal })
+				try {
+					const response = await nodeFetch(file.url, { timeout });
+					// On data reception, increase the global downloaded counter
+					response.body.on('data', (chunk: Buffer) => {
+						downloaded += chunk.length;
+						// Emit progress with the current total downloaded vs. full size
+						this.emit('progress', downloaded, size, file.type);
+						writer.write(chunk);
+					});
 
-				clearTimeout(timeoutId);
+					response.body.on('end', () => {
+						writer.end();
+						completed++;
+						downloadNext();
+					});
 
-				const stream = fromAnyReadable(response.body as any);
-
-				stream.on('data', (chunk: Buffer) => {
-					downloaded += chunk.length;
-					this.emit('progress', downloaded, size, file.type);
-					writer.write(chunk);
-				});
-
-				stream.on('end', () => {
+					response.body.on('error', async (err: Error) => {
+						writer.end();
+						if (retries < maxRetries) {
+							this.emit('retry', file, retries + 1);
+							await downloadNext(retries + 1);
+						} else {
+							completed++;
+							downloadNext();
+							this.emit('error', err);
+						}
+					});
+				} catch (e) {
 					writer.end();
-					completed++;
-					downloadNext();
-				});
-
-				stream.on('error', (err) => {
-					writer.destroy();
-					this.emit('error', err);
-					completed++;
-					downloadNext();
-				});
-			} catch (e) {
-				clearTimeout(timeoutId);
-				writer.destroy();
-				this.emit('error', e);
-				completed++;
-				downloadNext();
+					if (retries < maxRetries) {
+						this.emit('retry', file, retries + 1);
+						await downloadNext(retries + 1);
+					} else {
+						completed++;
+						downloadNext();
+						this.emit('error', e);
+					}
+				}
 			}
 		};
 
@@ -177,6 +194,7 @@ export default class Downloader extends EventEmitter {
 			}, 100);
 		});
 	}
+
 	
 
 	/**
