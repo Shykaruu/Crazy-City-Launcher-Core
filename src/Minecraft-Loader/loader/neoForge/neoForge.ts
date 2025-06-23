@@ -344,7 +344,7 @@ export default class NeoForgeMC extends EventEmitter {
 				}
 
 				if (!finalURL) {
-					return { error: `Impossible to download ${libInfo.name}` };
+					return { error: `Unable to download ${libInfo.name}` };
 				}
 
 				pendingFiles.push({
