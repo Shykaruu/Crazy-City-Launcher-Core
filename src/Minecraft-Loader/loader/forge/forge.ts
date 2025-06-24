@@ -183,7 +183,7 @@ export default class ForgeMC extends EventEmitter {
 			return { error: 'Invalid forge installer' };
 		}
 
-		const forgeFolder = path.resolve(this.options.path, 'forge');
+		const forgeFolder = path.resolve(this.options.path, 'libraries/net/minecraftforge/installer');
 		const fileName = `${forgeURL}.${ext}`.split('/').pop()!;
 		const installerPath = path.resolve(forgeFolder, fileName);
 
@@ -400,7 +400,8 @@ export default class ForgeMC extends EventEmitter {
 				}
 
 				if (!url) {
-					return { error: `Impossible to download ${libInfo.name}` };
+					this.emit('check', checkCount++, libraries.length, 'libraries');
+					this.emit('error', `Library ${libInfo.name} not found`);
 				}
 
 				downloadList.push({

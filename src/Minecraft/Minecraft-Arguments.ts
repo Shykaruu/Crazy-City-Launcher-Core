@@ -329,7 +329,7 @@ export default class MinecraftArguments {
 
 		for (const dep of combinedLibraries) {
 			const parts = getPathLibraries(dep.name);
-			const version = semver.coerce(parts.version);
+			const version = semver.valid(semver.coerce(parts.version));
 			if (!version) continue;
 
 			const pathParts = parts.path.split('/');
