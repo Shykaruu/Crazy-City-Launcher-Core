@@ -224,7 +224,7 @@ export default class Loader extends EventEmitter {
 		let profile: any;
 		try {
 			profile = await neoForge.extractProfile(installer.filePath);
-		} catch(exception) {
+		} catch(e) {
 			// Remove corrupted installer && try to re-download it
 			fs.unlinkSync(installer.filePath);
 			installer = await neoForge.downloadInstaller(LoaderData);
