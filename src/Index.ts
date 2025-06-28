@@ -8,9 +8,11 @@
 import Launch from './Launch.js';
 import Status from './StatusServer/status.js';
 import Downloader from './utils/Downloader.js';
+import { BugReporter } from './Minecraft/Bugs-Reporter.js';
 
 export {
     Launch as Launch,
     Status as Status,
-    Downloader as Downloader
+    Downloader as Downloader,
+    BugReporter as BugReporter
 };
